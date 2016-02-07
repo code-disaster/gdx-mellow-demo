@@ -21,12 +21,21 @@ import static com.badlogic.gdx.Input.Keys;
 public class MellowGame extends ApplicationAdapter {
 
 	private enum Mode {
+		// use raw floating point position
 		NaiveUseRawPosition,
+		// snap to nearest pixel position (classic behavior)
 		ClassicSnapToPixelPosition,
+		// displacement offset in shader
 		UpScaleShader,
+		// displacement offset in shader + linear texture filtering (bad idea)
 		UpScaleShaderWithLinearTextureFilter,
+		// displacement offset + bilinear filter in shader
 		UpScaleAndBilinearFilterShader
 	}
+
+	/*
+		The demo uses hardcoded screen and framebuffer sizes.
+	 */
 
 	private static final int FRAMEBUFFER_WIDTH = 320;
 	private static final int FRAMEBUFFER_HEIGHT = 256;
@@ -34,6 +43,10 @@ public class MellowGame extends ApplicationAdapter {
 
 	public static final int SCREEN_WIDTH = FRAMEBUFFER_WIDTH * UPSCALE;
 	public static final int SCREEN_HEIGHT = FRAMEBUFFER_HEIGHT * UPSCALE;
+
+	/*
+		World scale of 1/16 pixels. 20x16 tiles visible on screen.
+	 */
 
 	private static final float CAMERA_WIDTH = 20.0f;
 	private static final float CAMERA_HEIGHT = 16.0f;
@@ -43,6 +56,10 @@ public class MellowGame extends ApplicationAdapter {
 
 	private static final float WORLD_UNIT_SCALE = 16.0f;
 	private static final float WORLD_UNIT_INV_SCALE = 1.0f / WORLD_UNIT_SCALE;
+
+	/*
+		Acceleration and dampen factors to make WASD movement non-linear.
+	 */
 
 	private static final float WASD_TRANSLATE_ACCEL = 1.0f;
 	private static final float WASD_TRANSLATE_DAMPEN = 0.5f;
@@ -107,8 +124,12 @@ public class MellowGame extends ApplicationAdapter {
 		mapWidth = tiledMap.getProperties().get("width", int.class);
 		mapHeight = tiledMap.getProperties().get("height", int.class);
 
+		// initial camera position at center of map
+
 		cameraPosition.set(0.5f * mapWidth, 0.5f * mapHeight);
 		cameraFocus.set(cameraPosition);
+
+		// framebuffer and cameras
 
 		sceneCamera = new OrthographicCamera(CAMERA_WIDTH, CAMERA_HEIGHT);
 		sceneCamera.position.set(cameraFocus, 0f);
@@ -120,6 +141,8 @@ public class MellowGame extends ApplicationAdapter {
 		viewportCamera = new OrthographicCamera(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 		viewportCamera.position.set(0.5f * viewportCamera.viewportWidth, 0.5f * viewportCamera.viewportHeight, 0.0f);
 		viewportCamera.update();
+
+		// demo UI
 
 		ui = new Stage(new ScreenViewport(viewportCamera));
 		uiSkin = new Skin(Gdx.files.internal("ui/uiskin.json"));
@@ -183,6 +206,8 @@ public class MellowGame extends ApplicationAdapter {
 
 		ui.addActor(table);
 
+		// input
+
 		multiplexer = new InputMultiplexer(ui, input);
 		Gdx.input.setInputProcessor(multiplexer);
 	}
@@ -216,6 +241,9 @@ public class MellowGame extends ApplicationAdapter {
 
 		float dT = Gdx.graphics.getDeltaTime();
 
+		// scroll on mouse click, kind of hack'ish by faking WASD movement until target is
+		// *about* to be reached
+
 		if (cameraClickScroll) {
 			tmpVec2[0].set(cameraPosition).sub(cameraClickStart).nor();
 			tmpVec2[1].set(cameraClickTarget).sub(cameraPosition).nor();
@@ -228,6 +256,8 @@ public class MellowGame extends ApplicationAdapter {
 			}
 		}
 
+		// accelerate in WASD direction, and decelerate in opposite direction
+
 		tmpVec2[0].set(cameraDirection).nor().scl(WASD_TRANSLATE_ACCEL);
 		cameraTranslate.mulAdd(tmpVec2[0], dT * WASD_TRANSLATE_ACCEL);
 
@@ -235,6 +265,8 @@ public class MellowGame extends ApplicationAdapter {
 		cameraTranslate.mulAdd(tmpVec2[1], dT * WASD_TRANSLATE_DAMPEN);
 
 		cameraTranslate.lerp(Vector2.Zero, 0.1f * (1.0f - cameraDirection.nor().len()));
+
+		// keep camera position inside map (with 1/2 screen size for border to adjust for mouse look)
 
 		cameraPosition.add(cameraTranslate);
 
@@ -248,6 +280,8 @@ public class MellowGame extends ApplicationAdapter {
 
 		cameraPosition.x = MathUtils.clamp(cameraPosition.x, CAMERA_BORDER_DIST_X, mapWidth - CAMERA_BORDER_DIST_X);
 		cameraPosition.y = MathUtils.clamp(cameraPosition.y, CAMERA_BORDER_DIST_Y, mapHeight - CAMERA_BORDER_DIST_Y);
+
+		// mouse look
 
 		int mX = Gdx.input.getX();
 		int mY = Gdx.graphics.getHeight() - 1 - Gdx.input.getY();
@@ -265,6 +299,8 @@ public class MellowGame extends ApplicationAdapter {
 		float sceneX = cameraFocus.x + dX;
 		float sceneY = cameraFocus.y + dY;
 
+		// snap camera position to full pixels, avoiding floating point error artifacts
+
 		float sceneIX = sceneX;
 		float sceneIY = sceneY;
 
@@ -272,6 +308,8 @@ public class MellowGame extends ApplicationAdapter {
 			sceneIX = MathUtils.floor(sceneX * WORLD_UNIT_SCALE) / WORLD_UNIT_SCALE;
 			sceneIY = MathUtils.floor(sceneY * WORLD_UNIT_SCALE) / WORLD_UNIT_SCALE;
 		}
+
+		// calculate displacement offset: for UPSCALE=4, this results in (integer) offsets in [0..3]
 
 		float upscaleOffsetX = 0.0f;
 		float upscaleOffsetY = 0.0f;
@@ -282,6 +320,8 @@ public class MellowGame extends ApplicationAdapter {
 			upscaleOffsetX = (sceneX - sceneIX) * WORLD_UNIT_SCALE * UPSCALE;
 			upscaleOffsetY = (sceneY - sceneIY) * WORLD_UNIT_SCALE * UPSCALE;
 		}
+
+		// subpixel interpolation in [0..1]: basically the delta between two displacement offset values
 
 		float subpixelX = 0.0f;
 		float subpixelY = 0.0f;
@@ -294,10 +334,14 @@ public class MellowGame extends ApplicationAdapter {
 		upscaleOffsetX -= subpixelX;
 		upscaleOffsetY -= subpixelY;
 
+		// set camera for rendering to snapped position
+
 		sceneCamera.position.set(sceneIX, sceneIY, 0.0f);
 		sceneCamera.update();
 
-		Gdx.gl20.glEnable(GL20.GL_SCISSOR_TEST);
+		// render tilemap to framebuffer
+
+		Gdx.gl20.glEnable(GL20.GL_SCISSOR_TEST); // re-enabled each frame because UI changes GL state
 		HdpiUtils.glScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
 		Gdx.gl.glClearColor(0.0f, 0.0f, 0.3f, 1.0f);
@@ -310,6 +354,9 @@ public class MellowGame extends ApplicationAdapter {
 
 		sceneFrameBuffer.end();
 
+		// render upscaled framebuffer to backbuffer
+		// viewport/scissor adjust for artifacts at right/top pixel columns/lines
+
 		HdpiUtils.glViewport(UPSCALE / 2, UPSCALE / 2, SCREEN_WIDTH, SCREEN_HEIGHT);
 		HdpiUtils.glScissor(UPSCALE / 2, UPSCALE / 2, SCREEN_WIDTH - UPSCALE, SCREEN_HEIGHT - UPSCALE);
 
@@ -321,8 +368,12 @@ public class MellowGame extends ApplicationAdapter {
 		batch.draw(sceneFrameBuffer.getColorBufferTexture(), 0, SCREEN_HEIGHT, SCREEN_WIDTH, -SCREEN_HEIGHT);
 		batch.end();
 
+		// reset scissor
+
 		batch.setShader(null);
 		HdpiUtils.glScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+		// render UI
 
 		ui.act();
 		ui.draw();
