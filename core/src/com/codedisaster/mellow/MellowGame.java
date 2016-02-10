@@ -8,11 +8,8 @@ import com.badlogic.gdx.maps.tiled.TiledMap;
 import com.badlogic.gdx.maps.tiled.TmxMapLoader;
 import com.badlogic.gdx.maps.tiled.renderers.OrthogonalTiledMapRenderer;
 import com.badlogic.gdx.math.*;
-import com.badlogic.gdx.scenes.scene2d.*;
+import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
-import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
-import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
-import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.GdxRuntimeException;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 
@@ -39,10 +36,13 @@ public class MellowGame extends ApplicationAdapter {
 
 	private static final int FRAMEBUFFER_WIDTH = 320;
 	private static final int FRAMEBUFFER_HEIGHT = 256;
-	private static final int UPSCALE = 4;
+	private static final int UPSCALE = 2;
 
-	public static final int SCREEN_WIDTH = FRAMEBUFFER_WIDTH * UPSCALE;
-	public static final int SCREEN_HEIGHT = FRAMEBUFFER_HEIGHT * UPSCALE;
+	private static final int VIEWPORT_WIDTH = FRAMEBUFFER_WIDTH * UPSCALE;
+	private static final int VIEWPORT_HEIGHT = FRAMEBUFFER_HEIGHT * UPSCALE;
+
+	public static final int SCREEN_WIDTH = VIEWPORT_WIDTH * 2;
+	public static final int SCREEN_HEIGHT = VIEWPORT_HEIGHT * 2;
 
 	/*
 		World scale of 1/16 pixels. 20x16 tiles visible on screen.
@@ -73,6 +73,7 @@ public class MellowGame extends ApplicationAdapter {
 	private FrameBuffer sceneFrameBuffer;
 	private OrthographicCamera sceneCamera;
 	private OrthographicCamera viewportCamera;
+	private OrthographicCamera screenCamera;
 
 	private int fps;
 	private GlyphLayout fpsGlyphs = new GlyphLayout();
@@ -99,8 +100,11 @@ public class MellowGame extends ApplicationAdapter {
 	private Vector2 cameraClickTarget = new Vector2();
 
 	private boolean lookAround = true;
-	private Mode mellowMode = Mode.ClassicSnapToPixelPosition;
+	private Mode mellowMode = Mode.UpScaleAndBilinearFilterShader;
 	private boolean slowFPS = false;
+
+	private int fpsIndex = 1;
+	private float slowFpsSceneX, slowFpsSceneY;
 
 	private Vector2[] tmpVec2 = new Vector2[] { new Vector2(), new Vector2() };
 	private Vector3 tmpVec3 = new Vector3();
@@ -119,7 +123,7 @@ public class MellowGame extends ApplicationAdapter {
 		}
 
 		tiledMap = new TmxMapLoader().load("maps/test2.tmx");
-		tiledMapRenderer = new OrthogonalTiledMapRenderer(tiledMap, WORLD_UNIT_INV_SCALE, batch);
+		tiledMapRenderer = new OrthogonalTiledMapRenderer(tiledMap, WORLD_UNIT_INV_SCALE);
 
 		mapWidth = tiledMap.getProperties().get("width", int.class);
 		mapHeight = tiledMap.getProperties().get("height", int.class);
@@ -138,17 +142,20 @@ public class MellowGame extends ApplicationAdapter {
 		sceneFrameBuffer = new FrameBuffer(Pixmap.Format.RGB888, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT, false);
 		sceneFrameBuffer.getColorBufferTexture().setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
 
-		viewportCamera = new OrthographicCamera(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+		viewportCamera = new OrthographicCamera(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 		viewportCamera.position.set(0.5f * viewportCamera.viewportWidth, 0.5f * viewportCamera.viewportHeight, 0.0f);
 		viewportCamera.update();
 
+		screenCamera = new OrthographicCamera(SCREEN_WIDTH, SCREEN_HEIGHT);
+		screenCamera.update();
+
 		// demo UI
 
-		ui = new Stage(new ScreenViewport(viewportCamera));
+		ui = new Stage(new ScreenViewport(screenCamera));
 		uiSkin = new Skin(Gdx.files.internal("ui/uiskin.json"));
 		font = uiSkin.getFont("default-font");
 
-		Table table = new Table(uiSkin);
+/*		Table table = new Table(uiSkin);
 		table.top().left().pad(8).setFillParent(true);
 
 		Label modeLabel = new Label("[M/N]:", uiSkin);
@@ -205,7 +212,7 @@ public class MellowGame extends ApplicationAdapter {
 		}
 
 		ui.addActor(table);
-
+*/
 		// input
 
 		multiplexer = new InputMultiplexer(ui, input);
@@ -218,6 +225,7 @@ public class MellowGame extends ApplicationAdapter {
 		uiSkin.dispose();
 		ui.dispose();
 		tiledMapRenderer.dispose();
+		sceneFrameBuffer.dispose();
 		tiledMap.dispose();
 		mellowShader.dispose();
 		batch.dispose();
@@ -299,6 +307,53 @@ public class MellowGame extends ApplicationAdapter {
 		float sceneX = cameraFocus.x + dX;
 		float sceneY = cameraFocus.y + dY;
 
+		// render passes
+
+		Gdx.gl20.glEnable(GL20.GL_SCISSOR_TEST); // re-enabled each frame because UI changes GL state
+		HdpiUtils.glScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+		HdpiUtils.glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+		Gdx.gl.glClearColor(0.0f, 0.0f, 0.3f, 1.0f);
+		Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+		renderScene(sceneX - 0.5f * CAMERA_WIDTH, sceneY + 0.5f * CAMERA_HEIGHT, 0, VIEWPORT_HEIGHT, Mode.ClassicSnapToPixelPosition);
+
+		renderScene(sceneX + 0.5f * CAMERA_WIDTH, sceneY + 0.5f * CAMERA_HEIGHT, VIEWPORT_WIDTH, VIEWPORT_HEIGHT, Mode.UpScaleShader);
+
+		renderScene(sceneX + 0.5f * CAMERA_WIDTH, sceneY - 0.5f * CAMERA_HEIGHT, VIEWPORT_WIDTH, 0, Mode.UpScaleAndBilinearFilterShader);
+
+		fpsIndex = 1 - fpsIndex;
+		if (fpsIndex == 0) {
+			slowFpsSceneX = sceneX;
+			slowFpsSceneY = sceneY;
+		}
+
+		renderScene(slowFpsSceneX - 0.5f * CAMERA_WIDTH, slowFpsSceneY - 0.5f * CAMERA_HEIGHT, 0, 0, Mode.UpScaleAndBilinearFilterShader);
+
+		// reset scissor
+
+		batch.setShader(null);
+		batch.setProjectionMatrix(screenCamera.combined);
+		HdpiUtils.glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+		HdpiUtils.glScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+		// render UI
+
+		ui.act();
+		ui.draw();
+
+		batch.begin();
+//		font.draw(batch, fpsGlyphs, 8, 32);
+		font.draw(batch, "snap to position", 8, SCREEN_HEIGHT - 8);
+		font.draw(batch, "upscale shader", SCREEN_WIDTH - 120, SCREEN_HEIGHT - 8);
+		font.draw(batch, "upscale & sub-pixel shader", SCREEN_WIDTH - 200, 24);
+		font.draw(batch, "upscale & sub-pixel shader (30 fps)", 8, 24);
+		batch.end();
+	}
+
+	private void renderScene(float sceneX, float sceneY,
+							 int viewportOffsetX, int viewportOffsetY, Mode mellowMode) {
+
 		// snap camera position to full pixels, avoiding floating point error artifacts
 
 		float sceneIX = sceneX;
@@ -334,20 +389,18 @@ public class MellowGame extends ApplicationAdapter {
 		upscaleOffsetX -= subpixelX;
 		upscaleOffsetY -= subpixelY;
 
-		// set camera for rendering to snapped position
-
 		sceneCamera.position.set(sceneIX, sceneIY, 0.0f);
 		sceneCamera.update();
 
 		// render tilemap to framebuffer
 
-		Gdx.gl20.glEnable(GL20.GL_SCISSOR_TEST); // re-enabled each frame because UI changes GL state
-		HdpiUtils.glScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-
-		Gdx.gl.glClearColor(0.0f, 0.0f, 0.3f, 1.0f);
-		Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+		Gdx.gl20.glScissor(0, 0, sceneFrameBuffer.getWidth(), sceneFrameBuffer.getHeight());
+		Gdx.gl20.glViewport(0, 0, sceneFrameBuffer.getWidth(), sceneFrameBuffer.getHeight());
 
 		sceneFrameBuffer.begin();
+
+		Gdx.gl.glClearColor(0.0f, 0.3f, 0.0f, 1.0f);
+		Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
 		tiledMapRenderer.setView(sceneCamera);
 		tiledMapRenderer.render();
@@ -357,29 +410,26 @@ public class MellowGame extends ApplicationAdapter {
 		// render upscaled framebuffer to backbuffer
 		// viewport/scissor adjust for artifacts at right/top pixel columns/lines
 
-		HdpiUtils.glViewport(UPSCALE / 2, UPSCALE / 2, SCREEN_WIDTH, SCREEN_HEIGHT);
-		HdpiUtils.glScissor(UPSCALE / 2, UPSCALE / 2, SCREEN_WIDTH - UPSCALE, SCREEN_HEIGHT - UPSCALE);
+		// .. displaced + sub-pixel
+
+		HdpiUtils.glViewport(
+				viewportOffsetX + UPSCALE / 2,
+				viewportOffsetY + UPSCALE / 2,
+				VIEWPORT_WIDTH,
+				VIEWPORT_HEIGHT);
+
+		HdpiUtils.glScissor(
+				viewportOffsetX + UPSCALE / 2,
+				viewportOffsetY + UPSCALE / 2,
+				VIEWPORT_WIDTH - UPSCALE,
+				VIEWPORT_HEIGHT - UPSCALE);
 
 		batch.begin();
 		batch.setShader(mellowShader);
 		batch.setProjectionMatrix(viewportCamera.combined);
 		mellowShader.setUniformf("u_textureSizes", FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT, UPSCALE, 0.0f);
 		mellowShader.setUniformf("u_sampleProperties", subpixelX, subpixelY, upscaleOffsetX, upscaleOffsetY);
-		batch.draw(sceneFrameBuffer.getColorBufferTexture(), 0, SCREEN_HEIGHT, SCREEN_WIDTH, -SCREEN_HEIGHT);
-		batch.end();
-
-		// reset scissor
-
-		batch.setShader(null);
-		HdpiUtils.glScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-
-		// render UI
-
-		ui.act();
-		ui.draw();
-
-		batch.begin();
-		font.draw(batch, fpsGlyphs, 8, 32);
+		batch.draw(sceneFrameBuffer.getColorBufferTexture(), 0, VIEWPORT_HEIGHT, VIEWPORT_WIDTH, -VIEWPORT_HEIGHT);
 		batch.end();
 	}
 
