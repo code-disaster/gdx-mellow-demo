@@ -34,9 +34,9 @@ public class MellowGame extends ApplicationAdapter {
 		The demo uses hardcoded screen and framebuffer sizes.
 	 */
 
-	private static final int FRAMEBUFFER_WIDTH = 320;
-	private static final int FRAMEBUFFER_HEIGHT = 256;
-	private static final int UPSCALE = 2;
+	private static final int FRAMEBUFFER_WIDTH = 160;
+	private static final int FRAMEBUFFER_HEIGHT = 128;
+	private static final int UPSCALE = 4;
 
 	private static final int VIEWPORT_WIDTH = FRAMEBUFFER_WIDTH * UPSCALE;
 	private static final int VIEWPORT_HEIGHT = FRAMEBUFFER_HEIGHT * UPSCALE;
@@ -48,8 +48,8 @@ public class MellowGame extends ApplicationAdapter {
 		World scale of 1/16 pixels. 20x16 tiles visible on screen.
 	 */
 
-	private static final float CAMERA_WIDTH = 20.0f;
-	private static final float CAMERA_HEIGHT = 16.0f;
+	private static final float CAMERA_WIDTH = 10.0f;
+	private static final float CAMERA_HEIGHT = 8.0f;
 
 	private static final float CAMERA_BORDER_DIST_X = 0.75f * CAMERA_WIDTH;
 	private static final float CAMERA_BORDER_DIST_Y = 0.75f * CAMERA_HEIGHT;
@@ -347,7 +347,7 @@ public class MellowGame extends ApplicationAdapter {
 		font.draw(batch, "snap to position", 8, SCREEN_HEIGHT - 8);
 		font.draw(batch, "upscale shader", SCREEN_WIDTH - 120, SCREEN_HEIGHT - 8);
 		font.draw(batch, "upscale & sub-pixel shader", SCREEN_WIDTH - 200, 24);
-		font.draw(batch, "upscale & sub-pixel shader (30 fps)", 8, 24);
+		font.draw(batch, "upscale & sub-pixel shader (halved fps)", 8, 24);
 		batch.end();
 	}
 
@@ -525,7 +525,7 @@ public class MellowGame extends ApplicationAdapter {
 
 				cameraClickTarget.set(x, y);
 
-				cameraClickScroll = true;
+				//cameraClickScroll = true;
 			}
 
 			return false;
